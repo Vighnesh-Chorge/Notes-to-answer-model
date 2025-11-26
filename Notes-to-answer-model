@@ -1,0 +1,77 @@
+
+import fitz  # PyMuPDF
+import numpy as np
+import faiss
+import torch
+import re
+from sentence_transformers import SentenceTransformer
+from transformers import pipeline
+from google.colab import files
+
+print("📤 Upload your NOTES PDF:")
+uploaded = files.upload()
+pdf_filename = list(uploaded.keys())[0]
+
+def extract_text_from_pdf(pdf_path):
+    doc = fitz.open(pdf_path)
+    text = ""
+    for page in doc:
+        text += page.get_text()
+    return text
+
+def split_into_sentences(text):
+    return [s.strip() for s in re.split(r'(?<=[.?!])\s+', text) if len(s.strip()) > 20]
+
+model_embed = SentenceTransformer("all-MiniLM-L6-v2")
+def create_embeddings(sentences):
+    return model_embed.encode(sentences, convert_to_numpy=True)
+
+def build_faiss_index(embeddings):
+    dim = embeddings.shape[1]
+    index = faiss.IndexFlatL2(dim)
+    index.add(embeddings)
+    return index
+
+def get_contexts(question, index, sentences, model, top_k=6):
+    q_emb = model.encode([question], convert_to_numpy=True)
+    _, idx = index.search(q_emb, top_k)
+    return [sentences[i] for i in idx[0]]
+
+# ✅ Use Falcon-7B-Instruct — public and open
+print("⏳ Loading Falcon-7B-Instruct model...")
+generator = pipeline(
+    "text-generation",
+    model="tiiuae/falcon-7b-instruct",
+    torch_dtype=torch.float16,
+    device_map="auto",
+    max_new_tokens=500,
+)
+
+text = extract_text_from_pdf(pdf_filename)
+sentences = split_into_sentences(text)
+print(f"✅ Extracted {len(sentences)} sentences.")
+
+print("⚙️ Creating embeddings and building FAISS index...")
+embeddings = create_embeddings(sentences)
+faiss_index = build_faiss_index(embeddings)
+
+print("\n📥 Enter your assignment questions (one per line). Press Enter twice to finish:")
+questions = []
+while True:
+    q = input()
+    if not q.strip():
+        break
+    questions.append(q)
+
+print("\n📚 Generating detailed answers...\n")
+for question in questions:
+    context = "\n".join(get_contexts(question, faiss_index, sentences, model_embed))
+    prompt = (
+        f"Context:\n{context}\n\n"
+        f"Question: {question}\n"
+        f"Write a clear, exam-style answer in 7–10 lines. Use definitions, examples, and technical terms."
+    )
+
+    result = generator(prompt)[0]["generated_text"]
+    answer = result.split("Question:")[-1].split("Answer:")[-1].strip()
+    print(f"\n🟩 Question: {question}\n📝 Answer:\n{answer}\n{'='*80}")
