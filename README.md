@@ -1,6 +1,5 @@
-Here’s a clean, professional **README.md** you can copy directly into your project:
 
----
+
 
 # 📘 PDF-Based Question Answering System (RAG Pipeline)
 
